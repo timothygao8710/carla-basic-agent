@@ -8,3 +8,8 @@ pip install numpy six xmlschema networkx py_trees pygame
 cd /home/admin/Programs/scenario_runner-0.9.15
 pip install -r requirements.txt
 ```
+
+## Run
+```bash
+python automatic_control.py --agent Basic
+```
