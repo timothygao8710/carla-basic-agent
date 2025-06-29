@@ -3,8 +3,8 @@
 Minimal implementation of the Planner and VehiclePIDController using CARLA.
 
 ## Installation
-- CARLA 0.9.15 [CARLA_0.9.15.tar.gz](https://tiny.carla.org/carla-0-9-15-linux) [AdditionalMaps_0.9.15.tar.gz](https://tiny.carla.org/additional-maps-0-9-15-linux)
-- scenario_runner-0.9.15 [v0.9.15](https://github.com/carla-simulator/scenario_runner/releases/tag/v0.9.15)
+- CARLA 0.9.15 [[CARLA_0.9.15.tar.gz](https://tiny.carla.org/carla-0-9-15-linux) [AdditionalMaps_0.9.15.tar.gz](https://tiny.carla.org/additional-maps-0-9-15-linux)]
+- scenario_runner-0.9.15 [[v0.9.15](https://github.com/carla-simulator/scenario_runner/releases/tag/v0.9.15)]
 
 ```bash
 apt-get install libomp5
@@ -36,4 +36,5 @@ python automatic_control.py --agent Basic
 ```
 
 ## Acknowledgment
+- [modulardecision](https://github.com/decisionforce/modulardecision)
 - [CARLA scenario_runner-0.9.15](https://github.com/carla-simulator/scenario_runner/releases/tag/v0.9.15)
