@@ -1,13 +1,3 @@
-#!/usr/bin/env python3
-"""
-Autopilot Δ-logger *with* video recording.
-
-Outputs:
-  • deltas.npy  – N×2 (Δspeed [m/s], Δyaw [deg])
-  • MP4 video   – onboard RGB camera view
-
-Tested on CARLA 0.9.15 with Python ≥3.10.
-"""
 from __future__ import annotations
 import argparse, queue, sys
 from pathlib import Path
