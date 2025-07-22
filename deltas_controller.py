@@ -336,7 +336,6 @@ def _compute_connection(current_waypoint, next_waypoint, threshold=35):
     
     
 class LearnedLocalPlanner(LocalPlanner):
-    cur_speed = 0
     
     def set_relative_trajectory(self, rel_actions, dt=0.1):
         """
@@ -348,17 +347,16 @@ class LearnedLocalPlanner(LocalPlanner):
         super().set_global_plan(plan, stop_waypoint_creation=True, clean_queue=True)
 
     def _build_plan(self, rel_actions, dt):
-        # v   = get_speed(self._vehicle) / 3.6             # km/h → m/s
+        v   = get_speed(self._vehicle) / 3.6             # km/h → m/s
         yaw = math.radians(self._vehicle.get_transform().rotation.yaw)
         loc = self._vehicle.get_location()
 
         plan, speeds = [], []
         x, y, z = loc.x, loc.y, loc.z
 
-        v = self.cur_speed
         for dv, dpsi_deg in rel_actions:
             v += dv
-            print(v)
+            v = max(v, 0)
             yaw += math.radians(dpsi_deg)                # ← convert ° → rad
 
             x += v * dt * math.cos(yaw)
@@ -370,9 +368,7 @@ class LearnedLocalPlanner(LocalPlanner):
             )
             plan.append((wp, RoadOption.LANEFOLLOW))
             speeds.append(v)
-
-        self.cur_speed += rel_actions[0][0]
-
+            
         return plan, speeds
 
     def run_step(self, debug=False):
