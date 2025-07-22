@@ -2,9 +2,45 @@ from __future__ import annotations
 import argparse, queue, sys
 from pathlib import Path
 from math import cos, sin, radians
-
-import numpy as np
+import math
 import carla, cv2
+
+from deltas_controller import LearnedLocalPlanner
+
+# --- camera geometry -------------------------------------------------------
+import numpy as np
+
+def build_K(w: int, h: int, fov_deg: float) -> np.ndarray:
+    """Intrinsic matrix from image size and horizontal FOV (deg)."""
+    f = w / (2.0 * np.tan(np.radians(fov_deg) * 0.5))
+    return np.array([[f, 0, w / 2.0],
+                     [0, f, h / 2.0],
+                     [0, 0,   1.0 ]])
+
+def get_world2cam(transform: carla.Transform) -> np.ndarray:
+    """
+    4×4 matrix that converts world coordinates (homogeneous) to the
+    left‑handed CARLA camera space (x = forward, y = right, z = up).
+    """
+    loc   = transform.location
+    roll  = np.radians(transform.rotation.roll)
+    pitch = np.radians(transform.rotation.pitch)
+    yaw   = np.radians(transform.rotation.yaw)
+
+    c_y, s_y = np.cos(yaw),   np.sin(yaw)
+    c_r, s_r = np.cos(roll),  np.sin(roll)
+    c_p, s_p = np.cos(pitch), np.sin(pitch)
+
+    # world → camera rotation (R_cam_world)
+    R = np.array([
+        [ c_p * c_y,                     c_p * s_y,                    -s_p],
+        [ s_r * s_p * c_y - c_r * s_y,  s_r * s_p * s_y + c_r * c_y,  s_r * c_p],
+        [ c_r * s_p * c_y + s_r * s_y,  c_r * s_p * s_y - s_r * c_y,  c_r * c_p]
+    ])
+    t = np.array([[loc.x], [loc.y], [loc.z]])
+    Rt = np.hstack((R, -R @ t))       # 3×4
+    return np.vstack((Rt, [0, 0, 0, 1]))   # 4×4
+
 
 def init_video(path: str, size: tuple[int, int], fps: int):
     """Open a VideoWriter with a codec that exists on this system."""
@@ -59,17 +95,6 @@ def main():
     if deltas.ndim != 2 or deltas.shape[1] != 2:
         sys.exit("[ERROR] Δ file must be N×2: [Δspeed, Δyaw]")
 
-    speeds = np.clip(np.cumsum(deltas[:, 0]), 0.0, None)   # m/s, never < 0
-    yaws   = np.cumsum(deltas[:, 1]) + yaw0                # deg
-
-    poses  = [carla.Location(x0, y0, z0)]
-    for v, yaw in zip(speeds, yaws):
-        step = yaw_to_vec(yaw) * v * dt        # displacement for this tick
-        poses.append(poses[-1] + carla.Location(step.x, step.y, 0.0))
-
-    # =======================================================================
-    #  SPAWN EGO & SENSORS
-    # =======================================================================
     bp_lib = world.get_blueprint_library()
     ego_bp = bp_lib.filter("vehicle.*model3")[0]
     ego    = world.spawn_actor(ego_bp, spawn_tf)
@@ -78,73 +103,94 @@ def main():
     cam_bp.set_attribute("image_size_x", "1280")
     cam_bp.set_attribute("image_size_y", "720")
     cam_bp.set_attribute("fov", "100")
-    cam_tf  = carla.Transform(carla.Location(x=1.6, z=1.4))
+    
+    cam_width, cam_height, cam_fov = 1280, 720, 100
+    K  = build_K(cam_width, cam_height, cam_fov)
+    Ki = K[:3, :3]                    # 3×3, handy later
+
+    # cam_tf  = carla.Transform(carla.Location(x=1.6, z=1.4))
+    
+    cam_tf = carla.Transform(
+    carla.Location(x=-8.0,   # 8 m behind the rear axle
+                   y=0.0,    # centred
+                   z=4.0),   # 4 m above ground
+    carla.Rotation(pitch=-15,  # slight downward tilt
+                   yaw=0.0,
+                   roll=0.0))
+    
+    
     cam     = world.spawn_actor(cam_bp, cam_tf, attach_to=ego)
     img_q: "queue.Queue[carla.Image]" = queue.Queue(2)
     cam.listen(lambda img: img_q.put(img) if not img_q.full() else None)
 
     video = init_video(args.video, (1280, 720), args.fps)
-
-    # =======================================================================
-    #  BUILD WAYPOINT PLAN
-    # =======================================================================
-    mp   = world.get_map()
-    plan = []
-    prev_wp = None
-    for loc in poses[1:]:
-        wp = mp.get_waypoint(
-            loc,
-            project_to_road=True,
-            lane_type=carla.LaneType.Driving)
-        if prev_wp is None or wp.transform.location.distance(
-                prev_wp.transform.location) > 0.2:     # dedupe
-            plan.append((wp, 4))   # 4 == RoadOption.LANEFOLLOW
-            prev_wp = wp
-
-    from local_planner import LocalPlanner
-    lp = LocalPlanner(
+    
+    print("inits done")
+    
+    planner = LearnedLocalPlanner(
         ego,
-        {"target_speed": np.max(speeds)*3.6,   # km/h
-         "sampling_radius": 0.5},              # finer than default 2 m
-        mp)
-    lp.set_global_plan(plan, stop_waypoint_creation=True, clean_queue=True)
+        opt_dict={
+            "dt": dt,          # keep controller’s dt in sync with the world
+            "target_speed": 0  # will be overwritten every tick anyway
+        }
+    )
 
-    # ­­­­­­­–– driving loop ­­­­­­­––
-    err_hist = []
+    tick   = 0
+    n_d    = len(deltas)
+    horizon = 10                  # send a 1‑second horizon each tick
+
     try:
-        for k, (v_target, yaw) in enumerate(zip(speeds, yaws), start=1):
-            lp.set_speed(v_target * 3.6)      # km/h
-            ctrl = lp.run_step(debug=args.show_wp)
-            ego.apply_control(ctrl)
+        while tick < n_d:
+            chunk = deltas[tick : tick + horizon]
+            
+            if chunk.shape[0] < horizon:
+                pad = np.zeros((horizon - chunk.shape[0], 2), dtype=np.float32)
+                chunk = np.vstack((chunk, pad))
+
+            print(chunk)
+
+            planner.set_relative_trajectory(chunk.tolist(), dt=dt)
+            control = planner.run_step(debug=True)
+            ego.apply_control(control)
             world.tick()
 
-            err = ego.get_location().distance(poses[k])
-            err_hist.append(err)
             try:
                 img = img_q.get_nowait()
+                frame = np.frombuffer(img.raw_data, np.uint8).reshape(
+                    (img.height, img.width, 4)
+                )[:, :, :3]
+
+                wps = [wp for wp, _ in list(planner._waypoints_queue)[:10]]
+
+                w2c = get_world2cam(cam.get_transform())
+                for wp in wps:
+                    p_world = np.array([wp.transform.location.x,
+                                        wp.transform.location.y,
+                                        wp.transform.location.z,
+                                        1.0])
+                    p_cam = w2c @ p_world
+                    if p_cam[0] <= 0:          # behind the camera
+                        continue
+                    proj = Ki @ (p_cam[:3] / p_cam[0])
+                    u, v = int(proj[0]), int(proj[1])
+                    if 0 <= u < cam_width and 0 <= v < cam_height:
+                        cv2.circle(frame, (u, v), 6, (0, 0, 255), -1)
+
                 if video:
-                    arr = np.frombuffer(img.raw_data, np.uint8).reshape(
-                        (img.height, img.width, 4))
-                    video.write(cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR))
+                    video.write(frame)
             except queue.Empty:
                 pass
 
-            if k % (args.fps*5) == 0:
-                print(f"  t={k*dt:5.1f}s  v={v_target:4.1f}  err={err:5.2f} m")
 
-    except KeyboardInterrupt:
-        print("\n[INFO] Stopped by user")
+            tick += 1
+            
+            print(tick, n_d)
 
-    err_arr = np.asarray(err_hist)
-    print("\n═════ L2 position error ═════")
-    print(f" samples   : {len(err_arr)}")
-    print(f" mean  [m] : {err_arr.mean():8.3f}")
-    print(f" RMS   [m] : {np.sqrt((err_arr**2).mean()):8.3f}")
-    print(f" max   [m] : {err_arr.max():8.3f}")
+    finally:
+        if video:
+            video.release()
+            print(f"[INFO] Video saved → {args.video}")
 
-    if video:
-        video.release()
-        print(f"[INFO] Video saved → {args.video}")
 
     cam.stop(); cam.destroy(); ego.destroy()
     tm.set_synchronous_mode(False)

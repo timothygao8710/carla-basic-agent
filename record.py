@@ -5,7 +5,7 @@ from math import atan2, degrees
 
 import numpy as np
 import carla, cv2
-
+import random
 def speed_mps(v: carla.Vector3D) -> float:
     return (v.x**2 + v.y**2 + v.z**2) ** 0.5
 
@@ -69,6 +69,8 @@ def main():
     deltas = []
     prev_speed = speed_mps(ego.get_velocity())
     prev_yaw   = yaw_wrap(ego.get_transform().rotation.yaw)
+    
+    tmp = 0
 
     for k in range(n_ticks):
         world.tick()
@@ -76,12 +78,18 @@ def main():
         cur_speed = speed_mps(ego.get_velocity())
         cur_yaw   = yaw_wrap(ego.get_transform().rotation.yaw)
 
+        
         delta_v   = cur_speed - prev_speed
         delta_yaw = yaw_wrap(cur_yaw - prev_yaw)
         
-        # print(delta_yaw)
+        if random.random() < 0.1:
+            print(delta_v, delta_yaw)
 
         deltas.append([delta_v, delta_yaw])
+        tmp += delta_v
+        
+        print(f"Speed: {cur_speed} {tmp}")
+        
         prev_speed, prev_yaw = cur_speed, cur_yaw
 
         try:

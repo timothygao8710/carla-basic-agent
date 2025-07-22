@@ -35,6 +35,8 @@ The system follows a sequential flow of components:
 python automatic_control.py --agent Basic
 ```
 
+cd /home/timothygao/VLA_driving/software && ./CarlaUE4.sh -RenderOffScreen -carla-server -benchmark -fps=10
+
 ## Acknowledgment
 - [modulardecision](https://github.com/decisionforce/modulardecision)
 - [CARLA scenario_runner-0.9.15](https://github.com/carla-simulator/scenario_runner/releases/tag/v0.9.15)
