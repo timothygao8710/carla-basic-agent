@@ -355,18 +355,19 @@ class LearnedLocalPlanner(LocalPlanner):
         x, y, z = loc.x, loc.y, loc.z
         
         self.proposed_wp_list = []
-
-        # v = self.cur_speed
-        v   = get_speed(self._vehicle) / 3.6             # km/h → m/s
+                
+        # v   = get_speed(self._vehicle) / 3.6             # km/h → m/s
+        v = self.cur_speed
         
         for dv, dpsi_deg in rel_actions:
-            v += dv
-            v = max(0, v)
-            print(v)
             yaw += math.radians(dpsi_deg)                # ← convert ° → rad
 
-            x += v * dt * math.cos(yaw)
-            y += v * dt * math.sin(yaw)
+            x += (v + dv * 1/2) * dt * math.cos(yaw)
+            y += (v + dv * 1/2) * dt * math.sin(yaw)
+            
+            v += dv
+            v = max(0, v)
+            # print(v)
             
             self.proposed_wp_list.append([x, y, z])
 
@@ -377,7 +378,8 @@ class LearnedLocalPlanner(LocalPlanner):
             plan.append((wp, RoadOption.LANEFOLLOW))
             speeds.append(v)
 
-        # self.cur_speed += rel_actions[0][0]
+        self.cur_speed += rel_actions[0][0]
+        # self.cur_speed += rel_actions[0][0] / 5
 
         return plan, speeds
 
